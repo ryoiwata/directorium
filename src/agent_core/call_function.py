@@ -3,6 +3,13 @@ Function dispatcher for Directorium agent tools.
 
 Routes tool calls to their implementations without enforcing any path context.
 Each tool is responsible for validating paths using the central path_security module.
+
+STAGING BEHAVIOR:
+- Write tools (move_file, create_folder, rename_file) use a staging mechanism.
+- When called with confirmed=False (default), they return:
+  "STAGED_ACTION: <tool_name> -> <param1>='<value1>', <param2>='<value2>'"
+- The main.py loop intercepts these responses and prompts the user for
+  individual confirmation before re-invoking with confirmed=True.
 """
 
 import copy
@@ -46,11 +53,11 @@ available_tools = [
 
 # Map tool names to their function implementations
 function_map = {
-    # Read-only tools
+    # Read-only tools (execute immediately, no staging)
     "get_files_info": get_files_info,
     "get_file_content": get_file_content,
     "get_file_metadata": get_file_metadata,
-    # Write tools
+    # Write tools (use STAGED_ACTION when confirmed=False)
     "move_file": move_file,
     "create_folder": create_folder,
     "rename_file": rename_file,

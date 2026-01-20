@@ -15,8 +15,11 @@ create_folder_schema = {
             "Creates a new folder (directory) at the specified path. The path "
             "must be absolute and within an authorized directory. Creates parent "
             "directories as needed (like mkdir -p). "
-            "STAGING MODE: Always call with confirmed=false first. Only set "
-            "confirmed=true after user explicitly approves with 'y' or 'yes'."
+            "MANDATORY STAGING: Set confirmed=False to propose the action for "
+            "user review. The tool will return a STAGED_ACTION response. "
+            "Set confirmed=True ONLY if the user has just provided explicit "
+            "permission (y/yes) for this specific folder creation. "
+            "NEVER set confirmed=True without prior user approval."
         ),
         "parameters": {
             "type": "object",
@@ -31,8 +34,9 @@ create_folder_schema = {
                 "confirmed": {
                     "type": "boolean",
                     "description": (
-                        "Set to false to stage the action (returns PENDING_ACTION). "
-                        "Set to true only after user confirms with 'y' or 'yes'."
+                        "Set to False to propose/stage the action (returns STAGED_ACTION). "
+                        "Set to True ONLY after user explicitly confirms with 'y' or 'yes' "
+                        "for THIS SPECIFIC action. Default is False."
                     ),
                     "default": False,
                 },
@@ -52,11 +56,11 @@ def create_folder(folder_path, confirmed=False, **kwargs):
 
     Args:
         folder_path: The absolute path where the folder should be created.
-        confirmed: If False, return PENDING_ACTION. If True, create the folder.
+        confirmed: If False, return STAGED_ACTION. If True, create the folder.
         **kwargs: Additional arguments (ignored, for forward compatibility)
 
     Returns:
-        PENDING_ACTION string (if not confirmed), success message, or error.
+        STAGED_ACTION string (if not confirmed), success message, or error.
     """
     try:
         # SECURITY: Validate path against whitelist (both phases)
@@ -77,17 +81,16 @@ def create_folder(folder_path, confirmed=False, **kwargs):
         parent_dir = os.path.dirname(resolved_path)
         will_create_parents = not os.path.exists(parent_dir)
 
-        # STAGING: Return PENDING_ACTION if not confirmed
+        # STAGING: Return STAGED_ACTION if not confirmed
         if not confirmed:
             if will_create_parents:
                 return (
-                    f"PENDING_ACTION: create_folder | "
-                    f"folder_path='{folder_path}' | "
-                    f"note=will create parent directories"
+                    f"STAGED_ACTION: create_folder -> "
+                    f"folder_path='{folder_path}' (will create parent directories)"
                 )
             else:
                 return (
-                    f"PENDING_ACTION: create_folder | "
+                    f"STAGED_ACTION: create_folder -> "
                     f"folder_path='{folder_path}'"
                 )
 

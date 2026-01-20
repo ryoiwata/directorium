@@ -15,8 +15,11 @@ rename_file_schema = {
             "Renames a file or directory. Both old and new paths must be "
             "absolute and within authorized directories. Typically used for "
             "renaming within the same directory. "
-            "STAGING MODE: Always call with confirmed=false first. Only set "
-            "confirmed=true after user explicitly approves with 'y' or 'yes'."
+            "MANDATORY STAGING: Set confirmed=False to propose the action for "
+            "user review. The tool will return a STAGED_ACTION response. "
+            "Set confirmed=True ONLY if the user has just provided explicit "
+            "permission (y/yes) for this specific rename operation. "
+            "NEVER set confirmed=True without prior user approval."
         ),
         "parameters": {
             "type": "object",
@@ -38,8 +41,9 @@ rename_file_schema = {
                 "confirmed": {
                     "type": "boolean",
                     "description": (
-                        "Set to false to stage the action (returns PENDING_ACTION). "
-                        "Set to true only after user confirms with 'y' or 'yes'."
+                        "Set to False to propose/stage the action (returns STAGED_ACTION). "
+                        "Set to True ONLY after user explicitly confirms with 'y' or 'yes' "
+                        "for THIS SPECIFIC action. Default is False."
                     ),
                     "default": False,
                 },
@@ -60,11 +64,11 @@ def rename_file(old_path, new_path, confirmed=False, **kwargs):
     Args:
         old_path: The absolute path to the file/directory to rename.
         new_path: The absolute path for the new name.
-        confirmed: If False, return PENDING_ACTION. If True, execute the rename.
+        confirmed: If False, return STAGED_ACTION. If True, execute the rename.
         **kwargs: Additional arguments (ignored, for forward compatibility)
 
     Returns:
-        PENDING_ACTION string (if not confirmed), success message, or error.
+        STAGED_ACTION string (if not confirmed), success message, or error.
     """
     try:
         # SECURITY: Validate old path against whitelist (both phases)
@@ -93,14 +97,11 @@ def rename_file(old_path, new_path, confirmed=False, **kwargs):
         old_name = os.path.basename(old_path)
         new_name = os.path.basename(new_path)
 
-        # STAGING: Return PENDING_ACTION if not confirmed
+        # STAGING: Return STAGED_ACTION if not confirmed
         if not confirmed:
             return (
-                f"PENDING_ACTION: rename_file | "
-                f"old_path='{old_path}' | "
-                f"new_path='{new_path}' | "
-                f"rename='{old_name}' -> '{new_name}' | "
-                f"item_type={item_type}"
+                f"STAGED_ACTION: rename_file -> "
+                f"old_path='{old_path}', new_path='{new_path}'"
             )
 
         # EXECUTION: Perform the rename operation

@@ -15,8 +15,11 @@ move_file_schema = {
         "description": (
             "Moves a file or directory from source to destination. Both paths "
             "must be absolute and within authorized directories. "
-            "STAGING MODE: Always call with confirmed=false first. Only set "
-            "confirmed=true after user explicitly approves with 'y' or 'yes'."
+            "MANDATORY STAGING: Set confirmed=False to propose the action for "
+            "user review. The tool will return a STAGED_ACTION response. "
+            "Set confirmed=True ONLY if the user has just provided explicit "
+            "permission (y/yes) for this specific move operation. "
+            "NEVER set confirmed=True without prior user approval."
         ),
         "parameters": {
             "type": "object",
@@ -38,8 +41,9 @@ move_file_schema = {
                 "confirmed": {
                     "type": "boolean",
                     "description": (
-                        "Set to false to stage the action (returns PENDING_ACTION). "
-                        "Set to true only after user confirms with 'y' or 'yes'."
+                        "Set to False to propose/stage the action (returns STAGED_ACTION). "
+                        "Set to True ONLY after user explicitly confirms with 'y' or 'yes' "
+                        "for THIS SPECIFIC action. Default is False."
                     ),
                     "default": False,
                 },
@@ -60,11 +64,11 @@ def move_file(source_path, destination_path, confirmed=False, **kwargs):
     Args:
         source_path: The absolute path to the file/directory to move.
         destination_path: The absolute path to the destination.
-        confirmed: If False, return PENDING_ACTION. If True, execute the move.
+        confirmed: If False, return STAGED_ACTION. If True, execute the move.
         **kwargs: Additional arguments (ignored, for forward compatibility)
 
     Returns:
-        PENDING_ACTION string (if not confirmed), success message, or error.
+        STAGED_ACTION string (if not confirmed), success message, or error.
     """
     try:
         # SECURITY: Validate source path against whitelist (both phases)
@@ -84,13 +88,11 @@ def move_file(source_path, destination_path, confirmed=False, **kwargs):
         # Determine what type of item we're moving
         item_type = "directory" if os.path.isdir(resolved_source) else "file"
 
-        # STAGING: Return PENDING_ACTION if not confirmed
+        # STAGING: Return STAGED_ACTION if not confirmed
         if not confirmed:
             return (
-                f"PENDING_ACTION: move_file | "
-                f"source_path='{source_path}' | "
-                f"destination_path='{destination_path}' | "
-                f"item_type={item_type}"
+                f"STAGED_ACTION: move_file -> "
+                f"source='{source_path}', destination='{destination_path}'"
             )
 
         # EXECUTION: Perform the move operation
