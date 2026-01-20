@@ -1,10 +1,16 @@
+"""
+Directorium Agent - Main Entry Point
+
+A stateful conversational agent with persistent memory using LangGraph.
+Supports multiple conversation sessions via thread_id.
+"""
+
 import argparse
-import json
 import os
 import sys
-from datetime import datetime
+import uuid
+
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 
 # Add src directory to Python path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -12,230 +18,279 @@ src_dir = os.path.normpath(os.path.join(current_dir, ".."))
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
-from agent_core.providers.prompt_loader import (  # noqa: E402
-    get_active_system_prompt
+from agent_core.graph import (  # noqa: E402
+    create_agent_graph,
+    stream_agent,
+    invoke_agent,
 )
-from agent_core.call_function import (  # noqa: E402
-    available_tools,
-    call_function,
-)
-from langchain_core.messages import (  # noqa: E402
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
+
+
+# ANSI color codes for terminal output
+class Colors:
+    HEADER = "\033[95m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    RESET = "\033[0m"
+
+
+def print_banner():
+    """Print the Directorium welcome banner."""
+    banner = f"""
+{Colors.CYAN}{Colors.BOLD}╔══════════════════════════════════════════════════════════════╗
+║                    DIRECTORIUM AGENT                         ║
+║              Stateful Conversational Assistant               ║
+╚══════════════════════════════════════════════════════════════╝{Colors.RESET}
+"""
+    print(banner)
+
+
+def print_help():
+    """Print available commands."""
+    help_text = f"""
+{Colors.YELLOW}Available Commands:{Colors.RESET}
+  {Colors.GREEN}/help{Colors.RESET}      - Show this help message
+  {Colors.GREEN}/new{Colors.RESET}       - Start a new conversation session
+  {Colors.GREEN}/session{Colors.RESET}   - Show current session ID
+  {Colors.GREEN}/clear{Colors.RESET}     - Clear the screen
+  {Colors.GREEN}/quit{Colors.RESET}      - Exit the agent (also: /exit, /q)
+
+{Colors.YELLOW}Tips:{Colors.RESET}
+  - Provide absolute paths when referencing files/directories
+  - The agent remembers context within a session
+  - Use /new to start fresh without history
+"""
+    print(help_text)
+
+
+def format_tool_call(tool_name: str, tool_args: dict) -> str:
+    """Format a tool call for display."""
+    args_str = ", ".join(f"{k}={repr(v)}" for k, v in tool_args.items())
+    return f"{Colors.DIM}[Tool: {tool_name}({args_str})]{Colors.RESET}"
+
+
+def run_interactive_session(
+    graph,
+    thread_id: str,
+    verbose: bool = False,
+    stream: bool = True
+):
+    """
+    Run an interactive conversation session.
+
+    Args:
+        graph: The compiled LangGraph agent.
+        thread_id: The conversation thread ID.
+        verbose: Whether to show detailed output.
+        stream: Whether to stream responses (shows tool calls in progress).
+    """
+    current_path = None
+
+    print(f"{Colors.DIM}Session ID: {thread_id}{Colors.RESET}")
+    print(f"{Colors.DIM}Type /help for available commands{Colors.RESET}\n")
+
+    while True:
+        try:
+            # Get user input
+            user_input = input(f"{Colors.GREEN}You:{Colors.RESET} ").strip()
+
+            if not user_input:
+                continue
+
+            # Handle commands
+            if user_input.startswith("/"):
+                cmd = user_input.lower()
+
+                if cmd in ["/quit", "/exit", "/q"]:
+                    print(f"\n{Colors.CYAN}Goodbye!{Colors.RESET}")
+                    break
+
+                elif cmd == "/help":
+                    print_help()
+                    continue
+
+                elif cmd == "/new":
+                    # Generate new thread ID
+                    thread_id = str(uuid.uuid4())[:8]
+                    print(f"\n{Colors.YELLOW}Started new session: {thread_id}{Colors.RESET}\n")
+                    continue
+
+                elif cmd == "/session":
+                    print(f"\n{Colors.YELLOW}Current session: {thread_id}{Colors.RESET}\n")
+                    continue
+
+                elif cmd == "/clear":
+                    os.system("clear" if os.name != "nt" else "cls")
+                    print_banner()
+                    continue
+
+                else:
+                    print(f"{Colors.RED}Unknown command: {user_input}{Colors.RESET}")
+                    print(f"{Colors.DIM}Type /help for available commands{Colors.RESET}\n")
+                    continue
+
+            # Process the message
+            print(f"\n{Colors.BLUE}Agent:{Colors.RESET} ", end="", flush=True)
+
+            if stream:
+                # Stream mode - show tool calls as they happen
+                final_response = None
+
+                for event in stream_agent(graph, user_input, thread_id, current_path):
+                    # Process each event from the stream
+                    for node_name, node_output in event.items():
+                        if node_name == "agent":
+                            messages = node_output.get("messages", [])
+                            for msg in messages:
+                                # Check for tool calls
+                                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                    if verbose:
+                                        print()  # Newline before tool calls
+                                        for tc in msg.tool_calls:
+                                            print(format_tool_call(tc["name"], tc["args"]))
+                                    else:
+                                        print(f"{Colors.DIM}[Using tools...]{Colors.RESET}", end=" ", flush=True)
+                                else:
+                                    # Final response
+                                    final_response = msg.content if hasattr(msg, "content") else str(msg)
+
+                        elif node_name == "tools":
+                            # Tool results
+                            if verbose:
+                                messages = node_output.get("messages", [])
+                                for msg in messages:
+                                    content = msg.content if hasattr(msg, "content") else str(msg)
+                                    # Truncate long tool outputs
+                                    if len(content) > 200:
+                                        content = content[:200] + "..."
+                                    print(f"{Colors.DIM}  -> {content}{Colors.RESET}")
+
+                # Print final response
+                if final_response:
+                    print(f"\n{final_response}")
+                print()
+
+            else:
+                # Non-streaming mode
+                response = invoke_agent(graph, user_input, thread_id, current_path)
+                print(f"{response}\n")
+
+        except KeyboardInterrupt:
+            print(f"\n\n{Colors.YELLOW}Use /quit to exit{Colors.RESET}\n")
+            continue
+
+        except EOFError:
+            print(f"\n{Colors.CYAN}Goodbye!{Colors.RESET}")
+            break
+
+        except Exception as e:
+            print(f"\n{Colors.RED}Error: {str(e)}{Colors.RESET}\n")
+            if verbose:
+                import traceback
+                traceback.print_exc()
 
 
 def main():
+    """Main entry point for the Directorium agent."""
     parser = argparse.ArgumentParser(
-        description="Query OpenAI API with a custom prompt"
+        description="Directorium - A stateful conversational file system agent"
     )
     parser.add_argument(
         "--query",
         type=str,
-        default=(
-            """What are often overlooked tips for AI engineering?
-            Use one paragraph maximum."""
-        ),
-        help="The query/prompt to send to OpenAI API"
+        default=None,
+        help="Single query to execute (non-interactive mode)"
+    )
+    parser.add_argument(
+        "--thread-id",
+        type=str,
+        default=None,
+        help="Conversation thread ID (generates new if not provided)"
+    )
+    parser.add_argument(
+        "--db-path",
+        type=str,
+        default="directorium_memory.db",
+        help="Path to SQLite database for conversation persistence"
     )
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Print detailed information including prompt and token usage"
+        help="Show detailed output including tool calls and results"
+    )
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Disable streaming mode (wait for complete response)"
     )
     args = parser.parse_args()
 
+    # Load environment variables
     load_dotenv()
 
-    prompt = args.query
-    model = os.environ.get("OPENAI_MODEL")
+    # Generate or use provided thread ID
+    thread_id = args.thread_id or str(uuid.uuid4())[:8]
 
-    # Load active system prompt and parameters from YAML
-    system_template, parameters = get_active_system_prompt()
-    temperature = parameters.get("temperature", 0)
-
-    # Initialize LangChain ChatOpenAI model with parameters from YAML
-    # Some models don't support temperature=0, so we'll use None (default) if 0
-    llm_kwargs = {"model": model}
-    if temperature != 0:
-        llm_kwargs["temperature"] = temperature
-    llm = ChatOpenAI(**llm_kwargs)
-
-    # Bind tools to the model with auto tool selection
-    llm_with_tools = llm.bind_tools(available_tools, tool_choice="auto")
-
-    # Initialize conversation history with system message and user prompt
-    messages = [
-        SystemMessage(content=system_template),
-        HumanMessage(content=prompt),
-    ]
-
-    # Print initial messages if verbose
-    if args.verbose:
-        print("=" * 80)
-        print("Initial messages:")
-        print("=" * 80)
-        for i, msg in enumerate(messages, 1):
-            print(f"\nMessage {i}:")
-            print(f"  Type: {msg.type}")
-            content_preview = (
-                f"{msg.content[:200]}..."
-                if len(str(msg.content)) > 200
-                else str(msg.content)
-            )
-            print(f"  Content: {content_preview}")
-        print("=" * 80)
-        print()
-
-    # Agent loop with max 20 iterations
-    # Note: 20 iterations supports multi-step file search operations:
-    # - Typical 4-level deep directory crawl: ~5-6 iterations
-    # - Broad search across multiple directories: ~10-15 iterations
-    # - Increase if working with deeply nested project structures
-    MAX_ITERATIONS = 20
-    response_content = None
-    total_prompt_tokens = 0
-    total_completion_tokens = 0
-
-    for iteration in range(MAX_ITERATIONS):
-        if args.verbose:
-            print(f"\n--- Iteration {iteration + 1}/{MAX_ITERATIONS} ---")
-
-        # Invoke the model with current messages
-        try:
-            response = llm_with_tools.invoke(messages)
-        except Exception as e:
-            # If temperature=0 is not supported, retry with default temp
-            if "temperature" in str(e).lower() and temperature == 0:
-                llm = ChatOpenAI(model=model)
-                llm_with_tools = llm.bind_tools(
-                    available_tools, tool_choice="auto"
-                )
-                response = llm_with_tools.invoke(messages)
-            else:
-                raise
-
-        # Capture model response: append to messages list
-        messages.append(response)
-
-        # Extract token usage and accumulate
-        if (hasattr(response, "response_metadata") and
-                response.response_metadata):
-            usage = response.response_metadata.get("token_usage", {})
-            total_prompt_tokens += usage.get("prompt_tokens", 0)
-            total_completion_tokens += usage.get("completion_tokens", 0)
-
-        # Handle tool calls if present
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            # Execute each tool call
-            for tool_call in response.tool_calls:
-                # Call the function and get the result
-                result_dict = call_function(tool_call, verbose=args.verbose)
-
-                # Extract tool_call_id for ToolMessage
-                if isinstance(tool_call, dict):
-                    tool_call_id = (
-                        tool_call.get("id") or
-                        tool_call.get("tool_call_id") or
-                        f"call_{id(tool_call)}"
-                    )
-                else:
-                    tool_call_id = getattr(
-                        tool_call, "id",
-                        getattr(
-                            tool_call, "tool_call_id", f"call_{id(tool_call)}"
-                        )
-                    )
-
-                # Create ToolMessage and add to message history
-                tool_message = ToolMessage(
-                    content=result_dict["content"],
-                    tool_call_id=tool_call_id
-                )
-                messages.append(tool_message)
-
-                # Print result if verbose
-                if args.verbose:
-                    print(f"-> {result_dict['content']}")
-
-            # Continue loop to process tool results
-            continue
-        else:
-            # Final text answer (no tool calls) - extract content and break
-            response_content = response.content
-            if args.verbose:
-                print(f"\nFinal response: {response_content}")
-            break
-
-    # Check if we reached max iterations without a final answer
-    if response_content is None:
-        print(
-            "Error: Maximum iterations reached without a final answer.",
-            file=sys.stderr
-        )
+    # Create the agent graph
+    try:
+        graph, checkpointer = create_agent_graph(db_path=args.db_path)
+    except Exception as e:
+        print(f"{Colors.RED}Failed to initialize agent: {e}{Colors.RESET}")
         sys.exit(1)
 
-    # Use accumulated token usage
-    prompt_tokens = total_prompt_tokens if total_prompt_tokens > 0 else None
-    completion_tokens = (
-        total_completion_tokens if total_completion_tokens > 0 else None
+    # Single query mode
+    if args.query:
+        try:
+            if not args.no_stream:
+                # Stream mode for single query
+                print(f"{Colors.BLUE}Agent:{Colors.RESET} ", end="", flush=True)
+                final_response = None
+
+                for event in stream_agent(graph, args.query, thread_id):
+                    for node_name, node_output in event.items():
+                        if node_name == "agent":
+                            messages = node_output.get("messages", [])
+                            for msg in messages:
+                                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                    if args.verbose:
+                                        print()
+                                        for tc in msg.tool_calls:
+                                            print(format_tool_call(tc["name"], tc["args"]))
+                                else:
+                                    final_response = msg.content if hasattr(msg, "content") else str(msg)
+
+                        elif node_name == "tools" and args.verbose:
+                            messages = node_output.get("messages", [])
+                            for msg in messages:
+                                content = msg.content if hasattr(msg, "content") else str(msg)
+                                if len(content) > 200:
+                                    content = content[:200] + "..."
+                                print(f"{Colors.DIM}  -> {content}{Colors.RESET}")
+
+                if final_response:
+                    print(f"\n{final_response}")
+            else:
+                response = invoke_agent(graph, args.query, thread_id)
+                print(response)
+
+        except Exception as e:
+            print(f"{Colors.RED}Error: {e}{Colors.RESET}")
+            sys.exit(1)
+
+        return
+
+    # Interactive mode
+    print_banner()
+    run_interactive_session(
+        graph,
+        thread_id,
+        verbose=args.verbose,
+        stream=not args.no_stream
     )
-
-    # Create logs directory if it doesn't exist
-    logs_dir = "logs"
-    os.makedirs(logs_dir, exist_ok=True)
-
-    # Generate timestamped log filename (JSON format)
-    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_filename = f"session_{timestamp_str}.json"
-    log_file = os.path.join(logs_dir, log_filename)
-
-    # Prepare log entry with all required fields
-    log_entry = {
-        "timestamp": datetime.now().isoformat(),
-        "model": model,
-        "system_prompt": system_template,
-        "prompt": prompt,
-        "response": response_content,
-        "usage": {
-            "prompt_tokens": (
-                prompt_tokens if prompt_tokens is not None else None
-            ),
-            "completion_tokens": (
-                completion_tokens if completion_tokens is not None else None
-            )
-        }
-    }
-
-    # Write pretty-printed JSON log entry to file
-    with open(log_file, "w", encoding="utf-8") as f:
-        json.dump(log_entry, f, indent=4, ensure_ascii=False)
-
-    # Handle verbose output
-    if args.verbose:
-        # Show truncated system prompt
-        system_preview = (
-            system_template[:100] + "..."
-            if len(system_template) > 100
-            else system_template
-        )
-        print(f"System Prompt (truncated): {system_preview}")
-        print(f"User prompt: {prompt}")
-        if prompt_tokens is not None and completion_tokens is not None:
-            print(f"Prompt tokens: {prompt_tokens}")
-            print(f"Response tokens: {completion_tokens}")
-        else:
-            print("Prompt tokens: N/A")
-            print("Response tokens: N/A")
-        print()
-        # Only print response_content if it exists (not None for tool calls)
-        if response_content is not None:
-            print(response_content)
-    else:
-        # Only print response_content if it exists (not None for tool calls)
-        if response_content is not None:
-            print(response_content)
 
 
 if __name__ == "__main__":
