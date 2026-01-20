@@ -1,3 +1,11 @@
+# Database files
+*.db
+*.db*
+
+# Config directories
+config/
+system_prompts/
+
 # Logs
 logs/
 

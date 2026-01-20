@@ -27,6 +27,10 @@ if src_dir not in sys.path:
 
 from agent_core.tools.get_files_info import get_files_info  # noqa: E402
 from agent_core.tools.get_file_content import get_file_content  # noqa: E402
+from agent_core.tools.get_file_metadata import get_file_metadata  # noqa: E402
+from agent_core.tools.move_file import move_file  # noqa: E402
+from agent_core.tools.create_folder import create_folder  # noqa: E402
+from agent_core.tools.rename_file import rename_file  # noqa: E402
 from agent_core.providers.prompt_loader import (  # noqa: E402
     get_active_system_prompt,
 )
@@ -88,8 +92,77 @@ def get_file_content_tool(path: str) -> str:
     return get_file_content(path=path)
 
 
+@tool
+def get_file_metadata_tool(file_path: str) -> str:
+    """
+    Retrieves metadata about a file including size, extension, and last
+    modified date.
+
+    Requires an absolute path that must be within one of the authorized
+    directories defined in the whitelist. Returns a JSON string.
+
+    Args:
+        file_path: The absolute path to the file. Must be within an
+                   authorized directory from the whitelist.
+    """
+    return get_file_metadata(file_path=file_path)
+
+
+@tool
+def move_file_tool(source_path: str, destination_path: str) -> str:
+    """
+    Moves a file or directory from source to destination.
+
+    Both paths must be absolute and within authorized directories defined
+    in the whitelist. Can also be used to move and rename in one operation.
+
+    Args:
+        source_path: The absolute path to the file/directory to move.
+        destination_path: The absolute path to the destination.
+    """
+    return move_file(source_path=source_path, destination_path=destination_path)
+
+
+@tool
+def create_folder_tool(folder_path: str) -> str:
+    """
+    Creates a new folder (directory) at the specified path.
+
+    The path must be absolute and within an authorized directory defined
+    in the whitelist. Creates parent directories as needed (like mkdir -p).
+
+    Args:
+        folder_path: The absolute path where the folder should be created.
+    """
+    return create_folder(folder_path=folder_path)
+
+
+@tool
+def rename_file_tool(old_path: str, new_path: str) -> str:
+    """
+    Renames a file or directory.
+
+    Both paths must be absolute and within authorized directories defined
+    in the whitelist. Typically used for renaming within the same directory.
+
+    Args:
+        old_path: The absolute path to the file/directory to rename.
+        new_path: The absolute path for the new name.
+    """
+    return rename_file(old_path=old_path, new_path=new_path)
+
+
 # List of tools for the agent
-tools = [get_files_info_tool, get_file_content_tool]
+tools = [
+    # Read-only tools
+    get_files_info_tool,
+    get_file_content_tool,
+    get_file_metadata_tool,
+    # Write tools
+    move_file_tool,
+    create_folder_tool,
+    rename_file_tool,
+]
 
 
 # -----------------------------------------------------------------------------

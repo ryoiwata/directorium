@@ -16,16 +16,44 @@ from agent_core.tools.get_file_content import (
     get_file_content,
     get_file_content_schema,
 )
+from agent_core.tools.get_file_metadata import (
+    get_file_metadata,
+    get_file_metadata_schema,
+)
+from agent_core.tools.move_file import (
+    move_file,
+    move_file_schema,
+)
+from agent_core.tools.create_folder import (
+    create_folder,
+    create_folder_schema,
+)
+from agent_core.tools.rename_file import (
+    rename_file,
+    rename_file_schema,
+)
 
 available_tools = [
+    # Read-only tools
     get_files_info_schema,
     get_file_content_schema,
+    get_file_metadata_schema,
+    # Write tools
+    move_file_schema,
+    create_folder_schema,
+    rename_file_schema,
 ]
 
 # Map tool names to their function implementations
 function_map = {
+    # Read-only tools
     "get_files_info": get_files_info,
     "get_file_content": get_file_content,
+    "get_file_metadata": get_file_metadata,
+    # Write tools
+    "move_file": move_file,
+    "create_folder": create_folder,
+    "rename_file": rename_file,
 }
 
 
