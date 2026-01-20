@@ -21,6 +21,14 @@ conda install conda-forge::python-dotenv --yes
 # Install openai: Official OpenAI Python library for interacting with OpenAI's API
 conda install conda-forge::openai --yes
 
+# Install langchain: Framework for building applications with LLMs
 conda install conda-forge::langchain --yes
 
+# Install langchain-openai: LangChain integration for OpenAI models
 conda install anaconda::langchain-openai --yes
+
+# Install langgraph: Framework for building stateful, multi-actor LLM applications
+conda install conda-forge::langgraph --yes
+
+# Install langgraph-checkpoint-sqlite: SQLite-based persistence for LangGraph conversation state
+pip install langgraph-checkpoint-sqlite
