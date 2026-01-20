@@ -49,9 +49,12 @@ class DirectoriumState(TypedDict):
             Uses add_messages reducer to properly handle message updates.
         current_path: The current working path context for the agent.
             Can be used by tools or prompts to maintain path awareness.
+        pending_action: Stores a pending write action awaiting user confirmation.
+            Contains tool name and arguments for HITL (Human-in-the-Loop) flow.
     """
     messages: Annotated[Sequence[BaseMessage], add_messages]
     current_path: Optional[str]
+    pending_action: Optional[dict]
 
 
 # -----------------------------------------------------------------------------
@@ -109,47 +112,65 @@ def get_file_metadata_tool(file_path: str) -> str:
 
 
 @tool
-def move_file_tool(source_path: str, destination_path: str) -> str:
+def move_file_tool(
+    source_path: str,
+    destination_path: str,
+    confirmed: bool = False
+) -> str:
     """
     Moves a file or directory from source to destination.
 
-    Both paths must be absolute and within authorized directories defined
-    in the whitelist. Can also be used to move and rename in one operation.
+    Both paths must be absolute and within authorized directories.
+    STAGING MODE: Always call with confirmed=false first to stage the action.
+    Only set confirmed=true after user explicitly approves with 'y' or 'yes'.
 
     Args:
         source_path: The absolute path to the file/directory to move.
         destination_path: The absolute path to the destination.
+        confirmed: If false, stages action. Set true only after user confirms.
     """
-    return move_file(source_path=source_path, destination_path=destination_path)
+    return move_file(
+        source_path=source_path,
+        destination_path=destination_path,
+        confirmed=confirmed
+    )
 
 
 @tool
-def create_folder_tool(folder_path: str) -> str:
+def create_folder_tool(folder_path: str, confirmed: bool = False) -> str:
     """
     Creates a new folder (directory) at the specified path.
 
-    The path must be absolute and within an authorized directory defined
-    in the whitelist. Creates parent directories as needed (like mkdir -p).
+    The path must be absolute and within an authorized directory.
+    STAGING MODE: Always call with confirmed=false first to stage the action.
+    Only set confirmed=true after user explicitly approves with 'y' or 'yes'.
 
     Args:
         folder_path: The absolute path where the folder should be created.
+        confirmed: If false, stages action. Set true only after user confirms.
     """
-    return create_folder(folder_path=folder_path)
+    return create_folder(folder_path=folder_path, confirmed=confirmed)
 
 
 @tool
-def rename_file_tool(old_path: str, new_path: str) -> str:
+def rename_file_tool(
+    old_path: str,
+    new_path: str,
+    confirmed: bool = False
+) -> str:
     """
     Renames a file or directory.
 
-    Both paths must be absolute and within authorized directories defined
-    in the whitelist. Typically used for renaming within the same directory.
+    Both paths must be absolute and within authorized directories.
+    STAGING MODE: Always call with confirmed=false first to stage the action.
+    Only set confirmed=true after user explicitly approves with 'y' or 'yes'.
 
     Args:
         old_path: The absolute path to the file/directory to rename.
         new_path: The absolute path for the new name.
+        confirmed: If false, stages action. Set true only after user confirms.
     """
-    return rename_file(old_path=old_path, new_path=new_path)
+    return rename_file(old_path=old_path, new_path=new_path, confirmed=confirmed)
 
 
 # List of tools for the agent
@@ -282,7 +303,8 @@ def invoke_agent(
     graph,
     user_message: str,
     thread_id: str,
-    current_path: Optional[str] = None
+    current_path: Optional[str] = None,
+    pending_action: Optional[dict] = None
 ) -> str:
     """
     Invoke the agent with a user message and return the response.
@@ -292,6 +314,7 @@ def invoke_agent(
         user_message: The user's input message.
         thread_id: The conversation thread ID for persistence.
         current_path: Optional current working path context.
+        pending_action: Optional pending action awaiting confirmation.
 
     Returns:
         str: The agent's response content.
@@ -302,6 +325,7 @@ def invoke_agent(
     input_state = {
         "messages": [HumanMessage(content=user_message)],
         "current_path": current_path,
+        "pending_action": pending_action,
     }
 
     # Get thread config
@@ -325,7 +349,8 @@ def stream_agent(
     graph,
     user_message: str,
     thread_id: str,
-    current_path: Optional[str] = None
+    current_path: Optional[str] = None,
+    pending_action: Optional[dict] = None
 ):
     """
     Stream the agent's response for a user message.
@@ -338,6 +363,7 @@ def stream_agent(
         user_message: The user's input message.
         thread_id: The conversation thread ID for persistence.
         current_path: Optional current working path context.
+        pending_action: Optional pending action awaiting confirmation.
 
     Yields:
         dict: State updates from each node in the graph.
@@ -348,6 +374,7 @@ def stream_agent(
     input_state = {
         "messages": [HumanMessage(content=user_message)],
         "current_path": current_path,
+        "pending_action": pending_action,
     }
 
     # Get thread config

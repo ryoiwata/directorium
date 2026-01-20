@@ -3,6 +3,7 @@ Directorium Agent - Main Entry Point
 
 A stateful conversational agent with persistent memory using LangGraph.
 Supports multiple conversation sessions via thread_id.
+Includes Human-in-the-Loop (HITL) safety with batch confirmation for write operations.
 """
 
 import argparse
@@ -24,6 +25,11 @@ from agent_core.graph import (  # noqa: E402
     invoke_agent,
 )
 
+# Import tool functions for direct execution after confirmation
+from agent_core.tools.move_file import move_file  # noqa: E402
+from agent_core.tools.create_folder import create_folder  # noqa: E402
+from agent_core.tools.rename_file import rename_file  # noqa: E402
+
 
 # ANSI color codes for terminal output
 class Colors:
@@ -36,6 +42,14 @@ class Colors:
     BOLD = "\033[1m"
     DIM = "\033[2m"
     RESET = "\033[0m"
+
+
+# Write tools that require HITL confirmation
+WRITE_TOOLS = {"move_file_tool", "create_folder_tool", "rename_file_tool"}
+
+# Confirmation keywords (case-insensitive)
+CONFIRM_KEYWORDS = {"y", "yes"}
+CANCEL_KEYWORDS = {"n", "no", "cancel", "abort"}
 
 
 def print_banner():
@@ -56,8 +70,15 @@ def print_help():
   {Colors.GREEN}/help{Colors.RESET}      - Show this help message
   {Colors.GREEN}/new{Colors.RESET}       - Start a new conversation session
   {Colors.GREEN}/session{Colors.RESET}   - Show current session ID
+  {Colors.GREEN}/pending{Colors.RESET}   - Show pending actions queue
   {Colors.GREEN}/clear{Colors.RESET}     - Clear the screen
   {Colors.GREEN}/quit{Colors.RESET}      - Exit the agent (also: /exit, /q)
+
+{Colors.YELLOW}File Operations (STAGING MODE):{Colors.RESET}
+  - All write operations (move, rename, create folder) are staged first
+  - Review the pending actions, then type 'y' or 'yes' to execute ALL
+  - Type 'n' or 'no' to cancel all pending actions
+  - Any other input clears pending actions and processes as new request
 
 {Colors.YELLOW}Tips:{Colors.RESET}
   - Provide absolute paths when referencing files/directories
@@ -73,6 +94,131 @@ def format_tool_call(tool_name: str, tool_args: dict) -> str:
     return f"{Colors.DIM}[Tool: {tool_name}({args_str})]{Colors.RESET}"
 
 
+def is_confirmation(user_input: str) -> bool:
+    """Check if user input is a confirmation (y/yes only)."""
+    normalized = user_input.lower().strip()
+    return normalized in CONFIRM_KEYWORDS
+
+
+def is_cancellation(user_input: str) -> bool:
+    """Check if user input is a cancellation."""
+    normalized = user_input.lower().strip()
+    return normalized in CANCEL_KEYWORDS
+
+
+def parse_pending_action(pending_str: str) -> dict:
+    """
+    Parse a PENDING_ACTION string into a structured dict.
+
+    Format: "PENDING_ACTION: tool_name | param1='value1' | param2='value2'"
+
+    Args:
+        pending_str: The PENDING_ACTION string from a tool
+
+    Returns:
+        Dict with 'tool_name' and 'args' keys, or None if parsing fails
+    """
+    if not pending_str.startswith("PENDING_ACTION:"):
+        return None
+
+    try:
+        # Remove prefix and split by |
+        content = pending_str[len("PENDING_ACTION:"):].strip()
+        parts = [p.strip() for p in content.split("|")]
+
+        if not parts:
+            return None
+
+        tool_name = parts[0]
+        args = {}
+
+        # Parse key=value pairs
+        for part in parts[1:]:
+            if "=" in part:
+                key, value = part.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+
+                # Remove quotes if present
+                if value.startswith("'") and value.endswith("'"):
+                    value = value[1:-1]
+                elif value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+
+                # Skip metadata fields (like 'note', 'item_type', 'rename')
+                if key not in ("note", "item_type", "rename"):
+                    args[key] = value
+
+        return {"tool_name": tool_name, "args": args}
+
+    except Exception:
+        return None
+
+
+def execute_pending_actions(pending_queue: list) -> list:
+    """
+    Execute all pending actions with confirmed=True.
+
+    Args:
+        pending_queue: List of pending action dicts
+
+    Returns:
+        List of result strings from each execution
+    """
+    # Map tool names to functions
+    tool_map = {
+        "move_file": move_file,
+        "create_folder": create_folder,
+        "rename_file": rename_file,
+    }
+
+    results = []
+
+    for action in pending_queue:
+        tool_name = action.get("tool_name")
+        args = action.get("args", {})
+
+        if tool_name not in tool_map:
+            results.append(f"Error: Unknown tool '{tool_name}'")
+            continue
+
+        func = tool_map[tool_name]
+
+        try:
+            # Execute with confirmed=True
+            result = func(**args, confirmed=True)
+            results.append(result)
+        except Exception as e:
+            results.append(f"Error executing {tool_name}: {str(e)}")
+
+    return results
+
+
+def format_pending_queue(pending_queue: list) -> str:
+    """Format the pending queue for display."""
+    if not pending_queue:
+        return "No pending actions."
+
+    lines = [f"{Colors.YELLOW}Pending Actions ({len(pending_queue)}):{Colors.RESET}"]
+
+    for i, action in enumerate(pending_queue, 1):
+        tool_name = action.get("tool_name", "unknown")
+        args = action.get("args", {})
+
+        if tool_name == "move_file":
+            desc = f"Move: {args.get('source_path', '?')} -> {args.get('destination_path', '?')}"
+        elif tool_name == "create_folder":
+            desc = f"Create folder: {args.get('folder_path', '?')}"
+        elif tool_name == "rename_file":
+            desc = f"Rename: {args.get('old_path', '?')} -> {args.get('new_path', '?')}"
+        else:
+            desc = f"{tool_name}: {args}"
+
+        lines.append(f"  {i}. {desc}")
+
+    return "\n".join(lines)
+
+
 def run_interactive_session(
     graph,
     thread_id: str,
@@ -80,7 +226,7 @@ def run_interactive_session(
     stream: bool = True
 ):
     """
-    Run an interactive conversation session.
+    Run an interactive conversation session with HITL batch support.
 
     Args:
         graph: The compiled LangGraph agent.
@@ -89,14 +235,24 @@ def run_interactive_session(
         stream: Whether to stream responses (shows tool calls in progress).
     """
     current_path = None
+    pending_queue = []  # Queue of pending write operations
 
     print(f"{Colors.DIM}Session ID: {thread_id}{Colors.RESET}")
     print(f"{Colors.DIM}Type /help for available commands{Colors.RESET}\n")
 
     while True:
         try:
+            # Show pending action count in prompt if any
+            if pending_queue:
+                prompt = (
+                    f"{Colors.YELLOW}[{len(pending_queue)} pending]{Colors.RESET} "
+                    f"{Colors.GREEN}You (y/n):{Colors.RESET} "
+                )
+            else:
+                prompt = f"{Colors.GREEN}You:{Colors.RESET} "
+
             # Get user input
-            user_input = input(f"{Colors.GREEN}You:{Colors.RESET} ").strip()
+            user_input = input(prompt).strip()
 
             if not user_input:
                 continue
@@ -114,13 +270,21 @@ def run_interactive_session(
                     continue
 
                 elif cmd == "/new":
-                    # Generate new thread ID
+                    # Generate new thread ID and clear pending queue
                     thread_id = str(uuid.uuid4())[:8]
+                    pending_queue = []
                     print(f"\n{Colors.YELLOW}Started new session: {thread_id}{Colors.RESET}\n")
                     continue
 
                 elif cmd == "/session":
-                    print(f"\n{Colors.YELLOW}Current session: {thread_id}{Colors.RESET}\n")
+                    print(f"\n{Colors.YELLOW}Current session: {thread_id}{Colors.RESET}")
+                    if pending_queue:
+                        print(format_pending_queue(pending_queue))
+                    print()
+                    continue
+
+                elif cmd == "/pending":
+                    print(f"\n{format_pending_queue(pending_queue)}\n")
                     continue
 
                 elif cmd == "/clear":
@@ -133,12 +297,42 @@ def run_interactive_session(
                     print(f"{Colors.DIM}Type /help for available commands{Colors.RESET}\n")
                     continue
 
-            # Process the message
+            # Handle pending queue confirmation/cancellation
+            if pending_queue:
+                if is_confirmation(user_input):
+                    # Execute all pending actions
+                    print(f"\n{Colors.BLUE}Agent:{Colors.RESET} Executing {len(pending_queue)} action(s)...\n")
+
+                    results = execute_pending_actions(pending_queue)
+
+                    for result in results:
+                        if result.startswith("Error"):
+                            print(f"  {Colors.RED}{result}{Colors.RESET}")
+                        else:
+                            print(f"  {Colors.GREEN}{result}{Colors.RESET}")
+
+                    pending_queue = []
+                    print()
+                    continue
+
+                elif is_cancellation(user_input):
+                    count = len(pending_queue)
+                    pending_queue = []
+                    print(f"\n{Colors.BLUE}Agent:{Colors.RESET} {Colors.YELLOW}Cancelled {count} pending action(s).{Colors.RESET}\n")
+                    continue
+
+                else:
+                    # Any other input clears pending and treats as new request
+                    pending_queue = []
+                    # Fall through to process as new input
+
+            # Process the message through the agent
             print(f"\n{Colors.BLUE}Agent:{Colors.RESET} ", end="", flush=True)
 
             if stream:
                 # Stream mode - show tool calls as they happen
                 final_response = None
+                new_pending_actions = []
 
                 for event in stream_agent(graph, user_input, thread_id, current_path):
                     # Process each event from the stream
@@ -156,31 +350,68 @@ def run_interactive_session(
                                         print(f"{Colors.DIM}[Using tools...]{Colors.RESET}", end=" ", flush=True)
                                 else:
                                     # Final response
-                                    final_response = msg.content if hasattr(msg, "content") else str(msg)
+                                    content = msg.content if hasattr(msg, "content") else str(msg)
+                                    final_response = content
 
                         elif node_name == "tools":
-                            # Tool results
-                            if verbose:
-                                messages = node_output.get("messages", [])
-                                for msg in messages:
-                                    content = msg.content if hasattr(msg, "content") else str(msg)
+                            # Tool results - check for PENDING_ACTION
+                            messages = node_output.get("messages", [])
+                            for msg in messages:
+                                content = msg.content if hasattr(msg, "content") else str(msg)
+
+                                # Check if this is a PENDING_ACTION
+                                if content.startswith("PENDING_ACTION:"):
+                                    parsed = parse_pending_action(content)
+                                    if parsed:
+                                        new_pending_actions.append(parsed)
+
+                                if verbose:
                                     # Truncate long tool outputs
-                                    if len(content) > 200:
-                                        content = content[:200] + "..."
-                                    print(f"{Colors.DIM}  -> {content}{Colors.RESET}")
+                                    display_content = content
+                                    if len(display_content) > 300:
+                                        display_content = display_content[:300] + "..."
+                                    print(f"{Colors.DIM}  -> {display_content}{Colors.RESET}")
 
                 # Print final response
                 if final_response:
                     print(f"\n{final_response}")
+
+                # Add new pending actions to queue
+                if new_pending_actions:
+                    pending_queue.extend(new_pending_actions)
+                    print(f"\n{Colors.YELLOW}{'─' * 60}{Colors.RESET}")
+                    print(format_pending_queue(pending_queue))
+                    print(f"{Colors.YELLOW}{'─' * 60}{Colors.RESET}")
+                    print(f"{Colors.BOLD}Execute all pending actions? (y/n){Colors.RESET}")
+
                 print()
 
             else:
                 # Non-streaming mode
                 response = invoke_agent(graph, user_input, thread_id, current_path)
-                print(f"{response}\n")
+
+                # Check if response contains PENDING_ACTION markers
+                if "PENDING_ACTION:" in response:
+                    # Parse any pending actions from the response
+                    for line in response.split("\n"):
+                        if line.strip().startswith("PENDING_ACTION:"):
+                            parsed = parse_pending_action(line.strip())
+                            if parsed:
+                                pending_queue.append(parsed)
+
+                print(f"{response}")
+
+                if pending_queue:
+                    print(f"\n{Colors.YELLOW}{'─' * 60}{Colors.RESET}")
+                    print(format_pending_queue(pending_queue))
+                    print(f"{Colors.YELLOW}{'─' * 60}{Colors.RESET}")
+                    print(f"{Colors.BOLD}Execute all pending actions? (y/n){Colors.RESET}")
+
+                print()
 
         except KeyboardInterrupt:
             print(f"\n\n{Colors.YELLOW}Use /quit to exit{Colors.RESET}\n")
+            pending_queue = []  # Clear pending on interrupt
             continue
 
         except EOFError:
@@ -189,6 +420,7 @@ def run_interactive_session(
 
         except Exception as e:
             print(f"\n{Colors.RED}Error: {str(e)}{Colors.RESET}\n")
+            pending_queue = []  # Clear pending on error
             if verbose:
                 import traceback
                 traceback.print_exc()
@@ -249,6 +481,7 @@ def main():
                 # Stream mode for single query
                 print(f"{Colors.BLUE}Agent:{Colors.RESET} ", end="", flush=True)
                 final_response = None
+                pending_actions = []
 
                 for event in stream_agent(graph, args.query, thread_id):
                     for node_name, node_output in event.items():
@@ -263,16 +496,26 @@ def main():
                                 else:
                                     final_response = msg.content if hasattr(msg, "content") else str(msg)
 
-                        elif node_name == "tools" and args.verbose:
+                        elif node_name == "tools":
                             messages = node_output.get("messages", [])
                             for msg in messages:
                                 content = msg.content if hasattr(msg, "content") else str(msg)
-                                if len(content) > 200:
+                                if content.startswith("PENDING_ACTION:"):
+                                    parsed = parse_pending_action(content)
+                                    if parsed:
+                                        pending_actions.append(parsed)
+                                if args.verbose and len(content) > 200:
                                     content = content[:200] + "..."
-                                print(f"{Colors.DIM}  -> {content}{Colors.RESET}")
+                                if args.verbose:
+                                    print(f"{Colors.DIM}  -> {content}{Colors.RESET}")
 
                 if final_response:
                     print(f"\n{final_response}")
+
+                # Show pending actions for single query mode
+                if pending_actions:
+                    print(f"\n{Colors.YELLOW}Note: {len(pending_actions)} action(s) staged but not executed in single-query mode.{Colors.RESET}")
+                    print(f"{Colors.YELLOW}Use interactive mode to confirm and execute.{Colors.RESET}")
             else:
                 response = invoke_agent(graph, args.query, thread_id)
                 print(response)
