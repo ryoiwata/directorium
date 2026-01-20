@@ -8,6 +8,7 @@ Defines the agent graph with:
 """
 
 import os
+import sqlite3
 import sys
 from typing import Annotated, TypedDict, Sequence, Optional
 
@@ -177,7 +178,9 @@ def create_agent_graph(
     graph_builder.add_edge("tools", "agent")
 
     # Create checkpointer for persistence
-    checkpointer = SqliteSaver.from_conn_string(db_path)
+    # Use direct sqlite3 connection for long-running interactive sessions
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
 
     # Compile the graph with the checkpointer
     graph = graph_builder.compile(checkpointer=checkpointer)
